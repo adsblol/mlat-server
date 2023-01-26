@@ -1,0 +1,7 @@
+numpy
+scipy
+pykalman
+python-graph-core
+uvloop
+ujson
+Cython
