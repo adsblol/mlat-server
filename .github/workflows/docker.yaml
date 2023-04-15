@@ -22,7 +22,7 @@ jobs:
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v2
     - name: Docker meta
-      id: meta
+      id: docker_meta
       uses: docker/metadata-action@v4
       with:
         images: ghcr.io/${{ github.repository }}
