@@ -1,12 +1,16 @@
 name: docker build
 
 on:
+  schedule:
+    - cron: "0 10 * * *"
   push:
     branches:
     - "**"
     tags:
-    - "**"
-  pull_request_target:
+    - "v*.*.*"
+  pull_request:
+    branches:
+    - "master"
 
 permissions:
   contents: read
@@ -14,13 +18,17 @@ permissions:
 
 jobs:
   docker:
-    name: Publish Docker image
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
     steps:
+    - name: Set variables useful for later
+      id: useful_vars
+      run: |-
+        echo "::set-output name=timestamp::$(date +%s)"
+        echo "::set-output name=short_sha::${GITHUB_SHA::8}"
     - name: Checkout
-      uses: actions/checkout@v2
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v2
+      uses: actions/checkout@v3
     - name: Docker meta
       id: docker_meta
       uses: docker/metadata-action@v4
@@ -36,29 +44,32 @@ jobs:
           type=sha,prefix=,format=long,event=tag
           type=sha
           type=raw,value=latest,enable=${{ endsWith(github.ref, github.event.repository.default_branch) }}
-          type=raw,value=${{ github.ref_name }}-${{ steps.vars.outputs.short_sha }}-${{ steps.vars.outputs.timestamp }},enable=${{ endsWith(github.ref, github.event.repository.default_branch) }}
+          type=raw,value=${{ github.ref_name }}-${{ steps.useful_vars.outputs.short_sha }}-${{ steps.useful_vars.outputs.timestamp }},enable=${{ endsWith(github.ref, github.event.repository.default_branch) }}
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v2
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v1
-    - name: Login to GitHub Container Registry
-      uses: docker/login-action@v1
+      uses: docker/setup-buildx-action@v2
+    - name: Login to GHCR
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v2
       with:
         registry: ghcr.io
         username: ${{ github.repository_owner }}
         password: ${{ secrets.GITHUB_TOKEN }}
     - name: Cache Docker layers
-      uses: actions/cache@v2.1.5
+      uses: actions/cache@v3
       with:
         path: /tmp/.buildx-cache
         key: ${{ runner.os }}-buildx-${{ github.sha }}
         restore-keys: |
           ${{ runner.os }}-buildx-
     - name: Build and push
-      uses: docker/build-push-action@v3
+      uses: docker/build-push-action@v4
       with:
         context: .
-        push: true
+        push: ${{ github.event_name != 'pull_request' }}
         tags: ${{ steps.docker_meta.outputs.tags }}
         labels: ${{ steps.docker_meta.outputs.labels }}
+        platforms: linux/amd64,linux/arm64
         cache-from: type=local,src=/tmp/.buildx-cache
         cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
-        platforms: linux/amd64,linux/arm64,linux/arm/v7
