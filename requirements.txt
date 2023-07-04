@@ -4,9 +4,9 @@
 #
 #    pip-compile
 #
-cython==0.29.34
+cython==0.29.36
     # via -r requirements.in
-numpy==1.24.2
+numpy==1.25.0
     # via
     #   -r requirements.in
     #   scipy
@@ -14,9 +14,9 @@ pykalman==0.9.5
     # via -r requirements.in
 python-graph-core==1.8.2
     # via -r requirements.in
-scipy==1.10.1
+scipy==1.11.1
     # via -r requirements.in
-ujson==5.7.0
+ujson==5.8.0
     # via -r requirements.in
 uvloop==0.17.0
     # via -r requirements.in
