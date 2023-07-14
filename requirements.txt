@@ -6,7 +6,7 @@
 #
 cython==0.29.36
     # via -r requirements.in
-numpy==1.25.0
+numpy==1.25.1
     # via
     #   -r requirements.in
     #   scipy
