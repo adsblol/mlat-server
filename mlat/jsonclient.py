@@ -375,6 +375,10 @@ class JsonClient(connection.Connection):
                 if self.compress is None:
                     raise ValueError('No mutually usable compression type')
 
+                if self.handle_messages is None:
+                    print(hs)  # FIXME temporary debugging
+                    raise ValueError('No handle_messages method. Why??')
+
                 lat = float(hs['lat'])
                 if lat < -90 or lat > 90:
                     raise ValueError('invalid latitude, should be -90 .. 90')
