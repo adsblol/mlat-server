@@ -478,24 +478,24 @@ class Coordinator(object):
         cpu_time_us_per_sec = round((cpu_time - self.last_cpu_time) * (1e6 / 15))
         self.last_cpu_time = cpu_time
         try:
-            with open('/run/node_exporter/mlat-server.prom', 'w', encoding='utf-8') as f:
-                out = ''
-                out += 'mlat_server_cpu_ppm ' + str(cpu_time_us_per_sec) + '\n'
-                out += 'mlat_server_receivers ' + str(len(self.receivers)) + '\n'
-                out += 'mlat_server_ac_mlat ' + str(ac_count_mlat) + '\n'
-                out += 'mlat_server_ac_sync ' + str(ac_count_sync) + '\n'
-                out += 'mlat_server_ac_total ' + str(len(self.tracker.aircraft)) + '\n'
-                out += 'mlat_server_outlier_ppm ' + "{0:.0f}".format(total_outlier_percent * 1000) + '\n'
-                out += 'mlat_server_sync_points ' + "{0:.0f}".format(self.stats_sync_points / self.main_interval) + '\n'
-                out += 'mlat_server_sync_msgs ' + "{0:.0f}".format(self.stats_sync_msgs / self.main_interval) + '\n'
-                out += 'mlat_server_mlat_msgs ' + "{0:.0f}".format(self.stats_mlat_msgs / self.main_interval) + '\n'
-                out += 'mlat_server_valid_groups ' + "{0:.0f}".format(self.stats_valid_groups / self.main_interval) + '\n'
-                out += 'mlat_server_normalize_called ' + "{0:.0f}".format(self.stats_normalize / self.main_interval) + '\n'
-                out += 'mlat_server_solve_attempt ' + "{0:.0f}".format(self.stats_solve_attempt / self.main_interval) + '\n'
-                out += 'mlat_server_solve_success ' + "{0:.0f}".format(self.stats_solve_success / self.main_interval) + '\n'
-                out += 'mlat_server_solve_used ' + "{0:.0f}".format(self.stats_solve_used / self.main_interval) + '\n'
-
-                f.write(out)
+            out = [
+                'mlat_server_cpu_ppm ' + str(cpu_time_us_per_sec) + '\n',
+                'mlat_server_receivers ' + str(len(self.receivers)) + '\n',
+                'mlat_server_ac_mlat ' + str(ac_count_mlat) + '\n',
+                'mlat_server_ac_sync ' + str(ac_count_sync) + '\n',
+                'mlat_server_ac_total ' + str(len(self.tracker.aircraft)) + '\n',
+                'mlat_server_outlier_ppm ' + "{0:.0f}".format(total_outlier_percent * 1000) + '\n',
+                'mlat_server_sync_points ' + "{0:.0f}".format(self.stats_sync_points / self.main_interval) + '\n',
+                'mlat_server_sync_msgs ' + "{0:.0f}".format(self.stats_sync_msgs / self.main_interval) + '\n',
+                'mlat_server_mlat_msgs ' + "{0:.0f}".format(self.stats_mlat_msgs / self.main_interval) + '\n',
+                'mlat_server_valid_groups ' + "{0:.0f}".format(self.stats_valid_groups / self.main_interval) + '\n',
+                'mlat_server_normalize_called ' + "{0:.0f}".format(self.stats_normalize / self.main_interval) + '\n',
+                'mlat_server_solve_attempt ' + "{0:.0f}".format(self.stats_solve_attempt / self.main_interval) + '\n',
+                'mlat_server_solve_success ' + "{0:.0f}".format(self.stats_solve_success / self.main_interval) + '\n',
+                'mlat_server_solve_used ' + "{0:.0f}".format(self.stats_solve_used / self.main_interval) + '\n',
+            ]
+            with open('/run/mlat-server/metrics', 'w', encoding='utf-8') as f:
+                f.writelines(out)
         except OSError:
             pass
         except:
