@@ -340,6 +340,13 @@ class JsonClient(connection.Connection):
                 if hs['version'] != 2 and hs['version'] != 3:
                     raise ValueError('Unsupported version in handshake')
 
+                # If no compress key in hs, then the client is using an old version. see ya later!
+                if 'compress' not in hs.keys():
+                    raise ValueError('Unsupported: Missing compression')
+                # also, check against self._compression_methods
+                if not set(hs['compress']).issubset(set([c[0] for c in self._compression_methods])):
+                    raise ValueError('Unsupported compression type, got: ' + str(hs))
+
                 user = str(hs['user'])
                 uuid = hs.get('uuid')
 
@@ -376,7 +383,7 @@ class JsonClient(connection.Connection):
                     raise ValueError('No mutually usable compression type')
 
                 if self.handle_messages is None:
-                    print(hs)  # FIXME temporary debugging
+                    print(hs)  # FIXME temp
                     raise ValueError('No handle_messages method. Why??')
 
                 lat = float(hs['lat'])
