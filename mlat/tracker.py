@@ -21,17 +21,18 @@ Maintains state for all aircraft known to some client.
 Works out the set of aircraft we want the clients to send traffic for.
 """
 
-import random
 import asyncio
-import time
-from mlat import profile
-from mlat import kalman, config
-
 import logging
+import os
+import random
+import time
+
+from mlat import config, kalman, profile
+
 glogger = logging.getLogger("tracker")
 
-FORCE_MLAT_INTERVAL = 600
-NO_ADSB_MLAT_SECONDS = 120
+FORCE_MLAT_INTERVAL = int(os.getenv("MLAT_SERVER_FORCE_MLAT_INTERVAL", "600"))
+NO_ADSB_MLAT_SECONDS = int(os.getenv("MLAT_SERVER_NO_ADSB_MLAT_SECONDS", "120"))
 
 class TrackedAircraft(object):
     """A single tracked aircraft."""
