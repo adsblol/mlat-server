@@ -1,7 +1,7 @@
-FROM python:3.12-slim
+FROM python:3.13.0b1-slim
 WORKDIR /app
 COPY requirements.txt .
-RUN export BUILD_DEPS="gcc cmake make" && \
+RUN export BUILD_DEPS="libopenblas-dev liblapack-dev libmpfr-dev libmpc-dev libgfortran5 gfortran pkg-config gcc g++ build-essential cmake make" && \
     apt-get update && \
     apt-get -y install $BUILD_DEPS && \
     pip install --no-cache-dir -r requirements.txt && \
