@@ -31,7 +31,7 @@ from mlat import config, kalman, profile
 
 glogger = logging.getLogger("tracker")
 
-FORCE_MLAT_INTERVAL = int(os.getenv("MLAT_SERVER_FORCE_MLAT_INTERVAL", "600"))
+FORCE_MLAT_INTERVAL = int(os.getenv("MLAT_SERVER_FORCE_MLAT_INTERVAL", "1200"))
 NO_ADSB_MLAT_SECONDS = int(os.getenv("MLAT_SERVER_NO_ADSB_MLAT_SECONDS", "120"))
 
 class TrackedAircraft(object):
