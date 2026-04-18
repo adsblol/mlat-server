@@ -273,7 +273,7 @@ class Coordinator(object):
             elapsed_seen = now - ac.seen
             #if elapsed_seen > 3 * 3600:
             #    continue
-            icao_string = '{0:06X}'.format(ac.icao)
+            icao_string = ac.icao_hex
             s = {}
             aircraft_state[icao_string] = s
             s['icao'] = icao_string
@@ -431,8 +431,8 @@ class Coordinator(object):
                 'bad_sync_timeout': round(r.bad_syncs * 15 / 0.1),
                 'outlier_percent': round(r.outlier_percent_rolling, 1),
                 'bad_peer_list': str(bad_peer_list),
-                'sync_interest': [format(a.icao, '06x') for a in r.sync_interest],
-                'mlat_interest': [format(a.icao, '06x') for a in r.mlat_interest]
+                'sync_interest': [a.icao_hex_lower for a in r.sync_interest],
+                'mlat_interest': [a.icao_hex_lower for a in r.mlat_interest]
             }
 
             statistics = {

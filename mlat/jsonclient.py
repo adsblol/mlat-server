@@ -51,7 +51,7 @@ class JsonClientListener(net.MonitoringListener):
 
         self.udp_transport = None
         self.udp_protocol = None
-        self.clients = []
+        self.clients = set()
 
     async def _start(self):
         if self.udp_port:

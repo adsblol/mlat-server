@@ -386,7 +386,7 @@ class MlatTracker(object):
         # forward result to all receivers that received the raw message the result is based on
         self.coordinator.forward_results(cluster_utc, decoded.address,
                 ecef, ecef_cov,
-                list(group.receivers), distinct, dof,
+                group.receivers, distinct, dof,
                 ac.kalman, error)
 
         if self.pseudorange_file:

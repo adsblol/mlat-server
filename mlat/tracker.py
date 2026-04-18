@@ -40,6 +40,8 @@ class TrackedAircraft(object):
     def __init__(self, icao, allow_mlat):
         # ICAO address of this aircraft
         self.icao = icao
+        self.icao_hex = '{0:06X}'.format(icao)
+        self.icao_hex_lower = '{0:06x}'.format(icao)
 
         # Allow mlat of this aircraft?
         self.allow_mlat = allow_mlat
@@ -184,7 +186,7 @@ class Tracker(object):
     def _rebuild_mlat_wanted(self):
         self.loop.call_later(1.0, self._rebuild_mlat_wanted)
         now = time.time()
-        self.mlat_wanted = set()
+        self.mlat_wanted.clear()
         for ac in self.aircraft.values():
             since_force = now - ac.last_force_mlat
             if not ac.force_mlat and since_force > FORCE_MLAT_INTERVAL:

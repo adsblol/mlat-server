@@ -43,8 +43,6 @@ from mlat import geodesy, constants, profile, config
 from libc.math cimport sqrt
 from libc.string cimport memmove
 
-import pygraph.classes.graph
-import pygraph.algorithms.minmax
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.sparse.csgraph import minimum_spanning_tree
@@ -108,7 +106,7 @@ cdef get_limit(int cat):
     if cat == 3:
         return 16
 
-cdef _add_to_existing_syncpoint(dict clock_pairs, dict receiver_pairs, SyncPoint syncpoint, r0, double t0A, double t0B):
+cdef _add_to_existing_syncpoint(dict clock_pairs, dict receiver_pairs, SyncPoint syncpoint, r0, double t0A, double t0B, double now):
     # add a new receiver and timestamps to an existing syncpoint
 
     # new state for the syncpoint: receiver, timestamp A, timestamp B,
@@ -117,8 +115,6 @@ cdef _add_to_existing_syncpoint(dict clock_pairs, dict receiver_pairs, SyncPoint
 
     cdef double receiverDistA = ecef_distance(syncpoint.posA, r0.position)
     cdef double receiverDistB = ecef_distance(syncpoint.posB, r0.position)
-
-    cdef double now = time.time()
 
     # receiver distance check, checking one range is sufficient
     if receiverDistA > MAX_RANGE:
@@ -367,14 +363,14 @@ class ClockTracker(object):
             for syncpoint in syncpointlist:
                 if abs(syncpoint.interval - interval) < 0.75e-3:
                     # interval matches within 0.75ms, close enough.
-                    _add_to_existing_syncpoint(self.clock_pairs, self.receiver_pairs, syncpoint, receiver, tA, tB)
+                    _add_to_existing_syncpoint(self.clock_pairs, self.receiver_pairs, syncpoint, receiver, tA, tB, now)
                     return
             # no matching syncpoint in syncpointlist, add one
             syncpoint = SyncPoint(message_details, interval)
 
             syncpointlist.append(syncpoint)
 
-            _add_to_existing_syncpoint(self.clock_pairs, self.receiver_pairs, syncpoint, receiver, tA, tB)
+            _add_to_existing_syncpoint(self.clock_pairs, self.receiver_pairs, syncpoint, receiver, tA, tB, now)
 
             return
 
@@ -500,7 +496,7 @@ class ClockTracker(object):
             receiver.sync_range_exceeded = now
             return
 
-        _add_to_existing_syncpoint(self.clock_pairs, self.receiver_pairs, syncpoint, receiver, tA, tB)
+        _add_to_existing_syncpoint(self.clock_pairs, self.receiver_pairs, syncpoint, receiver, tA, tB, now)
 
     def clear_all_sync_points(self):
         """Clear all syncpoint lists from sync_points.
@@ -1092,39 +1088,43 @@ cdef _make_predictors(clock_pairs, station0, station1, double now):
     else:
         return (base_predictor, peer_predictor)
 
-cdef _label_heights(g, node, heights):
+cdef _label_heights(dict adj, node, dict heights):
     """Label each node in the tree with a root of 'node'
     with its height, filling the map 'heights' which
     should be initially empty."""
+    cdef double mn
 
     # we use heights as a visited-map too.
     heights[node] = 0
-    for each in g.neighbors(node):
+    for each, w in adj[node].items():
         if each not in heights:
-            _label_heights(g, each, heights)
-            mn = heights[each] + g.edge_weight((node, each))
+            _label_heights(adj, each, heights)
+            mn = heights[each] + w
             if mn > heights[node]:
                 heights[node] = mn
 
 
-cdef _tallest_branch(g, node, heights, ignore=None):
+cdef _tallest_branch(dict adj, node, dict heights, ignore=None):
     """Find the edge in the tree rooted at 'node' that is part of
     the tallest branch. If ignore is not None, ignore that neighbour.
     Returns (pathlen,node)"""
-    tallest = (0, None)
+    cdef double best_h = 0
+    cdef double eh
+    best_node = None
 
-    for each in g.neighbors(node):
+    for each, w in adj[node].items():
         if each is ignore:
             continue
 
-        eh = heights[each] + g.edge_weight((node, each))
-        if eh > tallest[0]:
-            tallest = (eh, each)
+        eh = heights[each] + w
+        if eh > best_h:
+            best_h = eh
+            best_node = each
 
-    return tallest
+    return (best_h, best_node)
 
 
-cdef _convert_timestamps(g, timestamp_map, predictor_map, node, results, conversion_chain, variance):
+cdef _convert_timestamps(dict adj, timestamp_map, predictor_map, node, results, list conversion_chain, double variance):
     """Rewrite node and all unvisited nodes reachable from node using the
     chain of clocksync objects in conversion_chain, populating the results dict.
 
@@ -1145,126 +1145,17 @@ cdef _convert_timestamps(g, timestamp_map, predictor_map, node, results, convers
 
     # convert all reachable unvisited nodes using a conversion to our timestamp
     # followed by the provided chain
-    for neighbor in g.neighbors(node):
+    for neighbor in adj[node]:
         if neighbor not in results:
             predictor = predictor_map[(neighbor, node)]
-            _convert_timestamps(g, timestamp_map, predictor_map,
+            conversion_chain.insert(0, predictor)
+            _convert_timestamps(adj, timestamp_map, predictor_map,
                                 neighbor,
                                 results,
-                                [predictor] + conversion_chain, variance + predictor.variance)
+                                conversion_chain, variance + predictor.variance)
+            conversion_chain.pop(0)
 
 
-@profile.trackcpu
-def normalize(clocktracker, timestamp_map):
-    """
-    Given {receiver: [(timestamp, utc), ...]}
-
-    return [{receiver: (variance, [(timestamp, utc), ...])}, ...]
-    where timestamps are normalized to some arbitrary base timescale within each map;
-    one map is returned per connected subgraph."""
-
-    # Represent the stations as a weighted graph where there
-    # is an edge between S0 and S1 with weight W if we have a
-    # sufficiently recent clock correlation between S0 and S1 with
-    # estimated variance W.
-    #
-    # This graph may have multiple disconnected components. Treat
-    # each separately and do this:
-    #
-    # Find the minimal spanning tree of the component. This will
-    # give us the edges to use to convert between timestamps with
-    # the lowest total error.
-    #
-    # Pick a central node of the MST to use as the the timestamp
-    # basis, where a central node is a node that minimizes the maximum
-    # path cost from the central node to any other node in the spanning
-    # tree.
-    #
-    # Finally, convert all timestamps in the tree to the basis of the
-    # central node.
-
-    # populate initial graph
-    g = pygraph.classes.graph.graph()
-    g.add_nodes(timestamp_map.keys())
-
-    # build a weighted graph where edges represent usable clock
-    # synchronization paths, and the weight of each edge represents
-    # the estimated variance introducted by converting a timestamp
-    # across that clock synchronization.
-
-    # also build a map of predictor objects corresponding to the
-    # edges for later use
-
-    now = time.time()
-
-    predictor_map = {}
-    for si in timestamp_map.keys():
-        for sj in timestamp_map.keys():
-            if si < sj:
-                predictors = _make_predictors(clocktracker.clock_pairs, si, sj, now)
-                if predictors:
-                    predictor_map[(si, sj)] = predictors[0]
-                    predictor_map[(sj, si)] = predictors[1]
-                    g.add_edge((si, sj), wt=predictors[0].variance)
-
-    # find a minimal spanning tree for each component of the graph
-    mst_forest = pygraph.algorithms.minmax.minimal_spanning_tree(g)
-
-    # rebuild the graph with only the spanning edges, retaining weights
-    # also note the roots of each tree as we go
-    g = pygraph.classes.graph.graph()
-    g.add_nodes(mst_forest.keys())
-    roots = []
-    for edge in mst_forest.items():
-        if edge[1] is None:
-            roots.append(edge[0])
-        else:
-            g.add_edge(edge, wt=predictor_map[edge].variance)
-
-    # for each spanning tree, find a central node and convert timestamps
-    resultComponents = []
-    for root in roots:
-        # label heights of nodes, where the height of a node is
-        # the length of the most expensive path to a child of the node
-        heights = {}
-        _label_heights(g, root, heights)
-
-        # Find the longest path in the spanning tree; we want to
-        # resolve starting at the center of this path, as this minimizes
-        # the maximum path length to any node
-
-        # find the two tallest branches leading from the root
-        tall1 = _tallest_branch(g, root, heights)
-        tall2 = _tallest_branch(g, root, heights, ignore=tall1[1])
-
-        # Longest path is TALL1 - ROOT - TALL2
-        # We want to move along the path into TALL1 until the distances to the two
-        # tips of the path are equal length. This is the same as finding a node on
-        # the path within TALL1 with a height of about half the longest path.
-        target = (tall1[0] + tall2[0]) / 2
-        central = root
-        step = tall1[1]
-        while step and abs(heights[central] - target) > abs(heights[step] - target):
-            central = step
-            _, step = _tallest_branch(g, central, heights, ignore=central)
-
-        # Convert timestamps so they are using the clock units of "central"
-        # by walking the spanning tree edges. Then finally convert to wallclock
-        # times as the last step by dividing by the final clock's frequency
-        results = {}
-
-        factor = 1 / central.clock.freq
-        variance = central.clock.jitter**2
-        source_ref = 0
-        target_ref = 0
-        conversion_chain = [_Predictor(target_ref, source_ref, factor, variance)]
-
-        _convert_timestamps(g, timestamp_map, predictor_map, central, results,
-                            conversion_chain, central.clock.jitter**2)
-
-        resultComponents.append(results)
-
-    return resultComponents
 
 class _my_component(object):
     """Simple object for holding a graph component"""
@@ -1308,10 +1199,6 @@ def normalize2(clocktracker, timestamp_map):
     receivers = list(timestamp_map.keys())
     receivers.sort() # to get a matrix with only entries above the diagonal when doing si < sj
 
-    # populate initial graph
-    g = pygraph.classes.graph.graph()
-    g.add_nodes(receivers)
-
     # build a weighted graph where edges represent usable clock
     # synchronization paths, and the weight of each edge represents
     # the estimated variance introducted by converting a timestamp
@@ -1322,14 +1209,16 @@ def normalize2(clocktracker, timestamp_map):
 
     cdef double now = time.time()
 
-    reclen = len(receivers)
-    predictor_count = 0
+    cdef int reclen = len(receivers)
+    cdef int predictor_count = 0
+    cdef int ri = 0
+    cdef int ci
+    cdef int index
     predictor_map = {}
 
     row = []
     col = []
     data = []
-    ri = 0
     for si in receivers:
         ci = 0
         for sj in receivers:
@@ -1338,7 +1227,6 @@ def normalize2(clocktracker, timestamp_map):
                 if predictors:
                     predictor_map[(si, sj)] = predictors[0]
                     predictor_map[(sj, si)] = predictors[1]
-                    g.add_edge((si, sj), wt=predictors[0].variance)
                     predictor_count += 1
                     data.append(predictors[0].variance)
                     row.append(ri)
@@ -1362,61 +1250,56 @@ def normalize2(clocktracker, timestamp_map):
     comps = {}
     for label in labels:
         if label not in comps:
-            comps[label] = (_my_component(label=label, receivers=[], size=0))
+            comps[label] = (_my_component(label=label, receivers=set(), size=0))
 
     index = 0
     for label in labels:
         comps[label].size += 1 # increment component size
-        comps[label].receivers.append(receivers[index])
+        comps[label].receivers.add(receivers[index])
         index += 1
 
     # make our dict a list so we can sort it
     comps = list(comps.values())
-    comps.sort(key=lambda x: x.size, reverse=True)
 
-    if len(comps) == 0:
+    if not comps:
         return [] # no results, return empty list
 
-    bigComp = comps[0] # biggest component
-    roots = [bigComp.receivers[0]] # let's just stay with a list for a moment ... doesn't hurt even if we only do one entry
+    bigComp = max(comps, key=lambda x: x.size)
+    roots = [next(iter(bigComp.receivers))] # let's just stay with a list for a moment ... doesn't hurt even if we only do one entry
     #print(bigComp.size)
 
     if bigComp.size < 3:
         return [] # too small, don't continue
 
     # rebuild the graph with only the spanning edges, retaining weights
-    g = pygraph.classes.graph.graph()
-    g.add_nodes(bigComp.receivers)
+    adj = {r: {} for r in bigComp.receivers}
 
     coo = mst.tocoo(copy=False)
     for index in range(len(coo.data)):
         weight = coo.data[index]
         si = receivers[coo.row[index]]
         sj = receivers[coo.col[index]]
-        if si in bigComp.receivers:
-            if si < sj:
-                edge = (si,sj)
-            else:
-                edge = (sj,si)
-            #g.add_edge((si, sj), wt=predictor_map[edge].variance)
-            g.add_edge((si, sj), wt=weight)
+        if si in adj:
+            adj[si][sj] = weight
+            adj[sj][si] = weight
 
     # for each spanning tree, find a central node and convert timestamps
     # actually we're only searching the biggest spanning tree now
     resultComponents = []
+    cdef double factor, variance, source_ref, target_ref
     for root in roots:
         # label heights of nodes, where the height of a node is
         # the length of the most expensive path to a child of the node
         heights = {}
-        _label_heights(g, root, heights)
+        _label_heights(adj, root, heights)
 
         # Find the longest path in the spanning tree; we want to
         # resolve starting at the center of this path, as this minimizes
         # the maximum path length to any node
 
         # find the two tallest branches leading from the root
-        tall1 = _tallest_branch(g, root, heights)
-        tall2 = _tallest_branch(g, root, heights, ignore=tall1[1])
+        tall1 = _tallest_branch(adj, root, heights)
+        tall2 = _tallest_branch(adj, root, heights, ignore=tall1[1])
 
         # Longest path is TALL1 - ROOT - TALL2
         # We want to move along the path into TALL1 until the distances to the two
@@ -1427,7 +1310,7 @@ def normalize2(clocktracker, timestamp_map):
         step = tall1[1]
         while step and abs(heights[central] - target) > abs(heights[step] - target):
             central = step
-            _, step = _tallest_branch(g, central, heights, ignore=central)
+            _, step = _tallest_branch(adj, central, heights, ignore=central)
 
         # Convert timestamps so they are using the clock units of "central"
         # by walking the spanning tree edges. Then finally convert to wallclock
@@ -1440,7 +1323,7 @@ def normalize2(clocktracker, timestamp_map):
         target_ref = 0
         conversion_chain = [_Predictor(target_ref, source_ref, factor, variance)]
 
-        _convert_timestamps(g, timestamp_map, predictor_map, central, results,
+        _convert_timestamps(adj, timestamp_map, predictor_map, central, results,
                             conversion_chain, central.clock.jitter**2)
 
         resultComponents.append(results)
