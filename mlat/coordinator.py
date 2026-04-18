@@ -264,6 +264,7 @@ class Coordinator(object):
 
     @profile.trackcpu
     def _write_state(self):
+        """Build state dicts and apply mutations. Returns (aircraft_state, sync, clients, prometheus_text) for executor."""
         aircraft_state = {}
         ac_count_mlat = len(self.tracker.mlat_wanted)
         ac_count_sync = 0
@@ -445,61 +446,27 @@ class Coordinator(object):
             # reset message counter
             r.connection.message_counter = 0
 
-        # The sync matrix json can be large.  This means it might take a little time to write out.
-        # This therefore means someone could start reading it before it has completed writing...
-        # So, write out to a temp file first, and then call os.replace(), which is ATOMIC, to overwrite the real file.
-        # (Do this for each file, because why not?)
-        syncfile = self.work_dir + '/sync.json'
-        clientsfile = self.work_dir + '/clients.json'
-        aircraftfile = self.work_dir + '/aircraft.json'
-
-        # sync.json
-        tmpfile = syncfile + '.tmp'
-        with closing(open(tmpfile, 'w')) as f:
-            ujson.dump(sync, f)
-        # We should probably check for errors here, but let's fire-and-forget, instead...
-        os.replace(tmpfile, syncfile)
-
-        # clients.json
-        tmpfile = clientsfile + '.tmp'
-        with closing(open(tmpfile, 'w')) as f:
-            ujson.dump(clients, f)
-        os.replace(tmpfile, clientsfile)
-
-        # aircraft.json
-        tmpfile = aircraftfile + '.tmp'
-        with closing(open(tmpfile, 'w')) as f:
-            ujson.dump(aircraft_state, f)
-        os.replace(tmpfile, aircraftfile)
-
         total_outlier_percent = 100 * outlier_sum / (sync_sum + 0.1)
 
         cpu_time = time.clock_gettime(time.CLOCK_PROCESS_CPUTIME_ID)
         cpu_time_us_per_sec = round((cpu_time - self.last_cpu_time) * (1e6 / 15))
         self.last_cpu_time = cpu_time
-        try:
-            out = [
-                'mlat_server_cpu_ppm ' + str(cpu_time_us_per_sec) + '\n',
-                'mlat_server_receivers ' + str(len(self.receivers)) + '\n',
-                'mlat_server_ac_mlat ' + str(ac_count_mlat) + '\n',
-                'mlat_server_ac_sync ' + str(ac_count_sync) + '\n',
-                'mlat_server_ac_total ' + str(len(self.tracker.aircraft)) + '\n',
-                'mlat_server_outlier_ppm ' + "{0:.0f}".format(total_outlier_percent * 1000) + '\n',
-                'mlat_server_sync_points ' + "{0:.0f}".format(self.stats_sync_points / self.main_interval) + '\n',
-                'mlat_server_sync_msgs ' + "{0:.0f}".format(self.stats_sync_msgs / self.main_interval) + '\n',
-                'mlat_server_mlat_msgs ' + "{0:.0f}".format(self.stats_mlat_msgs / self.main_interval) + '\n',
-                'mlat_server_valid_groups ' + "{0:.0f}".format(self.stats_valid_groups / self.main_interval) + '\n',
-                'mlat_server_normalize_called ' + "{0:.0f}".format(self.stats_normalize / self.main_interval) + '\n',
-                'mlat_server_solve_attempt ' + "{0:.0f}".format(self.stats_solve_attempt / self.main_interval) + '\n',
-                'mlat_server_solve_success ' + "{0:.0f}".format(self.stats_solve_success / self.main_interval) + '\n',
-                'mlat_server_solve_used ' + "{0:.0f}".format(self.stats_solve_used / self.main_interval) + '\n',
-            ]
-            with open('/run/mlat-server/metrics', 'w', encoding='utf-8') as f:
-                f.writelines(out)
-        except OSError:
-            pass
-        except:
-            glogger.exception("prom stats")
+
+        prometheus_text = ''
+        prometheus_text += 'mlat_server_cpu_ppm ' + str(cpu_time_us_per_sec) + '\n'
+        prometheus_text += 'mlat_server_receivers ' + str(len(self.receivers)) + '\n'
+        prometheus_text += 'mlat_server_ac_mlat ' + str(ac_count_mlat) + '\n'
+        prometheus_text += 'mlat_server_ac_sync ' + str(ac_count_sync) + '\n'
+        prometheus_text += 'mlat_server_ac_total ' + str(len(self.tracker.aircraft)) + '\n'
+        prometheus_text += 'mlat_server_outlier_ppm ' + "{0:.0f}".format(total_outlier_percent * 1000) + '\n'
+        prometheus_text += 'mlat_server_sync_points ' + "{0:.0f}".format(self.stats_sync_points / self.main_interval) + '\n'
+        prometheus_text += 'mlat_server_sync_msgs ' + "{0:.0f}".format(self.stats_sync_msgs / self.main_interval) + '\n'
+        prometheus_text += 'mlat_server_mlat_msgs ' + "{0:.0f}".format(self.stats_mlat_msgs / self.main_interval) + '\n'
+        prometheus_text += 'mlat_server_valid_groups ' + "{0:.0f}".format(self.stats_valid_groups / self.main_interval) + '\n'
+        prometheus_text += 'mlat_server_normalize_called ' + "{0:.0f}".format(self.stats_normalize / self.main_interval) + '\n'
+        prometheus_text += 'mlat_server_solve_attempt ' + "{0:.0f}".format(self.stats_solve_attempt / self.main_interval) + '\n'
+        prometheus_text += 'mlat_server_solve_success ' + "{0:.0f}".format(self.stats_solve_success / self.main_interval) + '\n'
+        prometheus_text += 'mlat_server_solve_used ' + "{0:.0f}".format(self.stats_solve_used / self.main_interval) + '\n'
 
         # reset stats
         self.stats_sync_points = 0
@@ -534,12 +501,33 @@ class Coordinator(object):
             self.next_status = now + self.status_interval
             glogger.warning(title_string)
 
+        return aircraft_state, sync, clients, prometheus_text
+
+    def _write_state_files(self, aircraft_state, sync, clients, prometheus_text):
+        """Run in executor thread — JSON serialization + file writes. No shared state access."""
+        for data, filepath in [(sync, self.work_dir + '/sync.json'),
+                               (clients, self.work_dir + '/clients.json'),
+                               (aircraft_state, self.work_dir + '/aircraft.json')]:
+            tmpfile = filepath + '.tmp'
+            with closing(open(tmpfile, 'w')) as f:
+                ujson.dump(data, f)
+            os.replace(tmpfile, filepath)
+
+        try:
+            with closing(open('/run/node_exporter/mlat-server.prom', 'w', encoding='utf-8')) as f:
+                f.write(prometheus_text)
+        except OSError:
+            pass
+
 
     async def every_15(self):
         while True:
             sleep = asyncio.create_task(asyncio.sleep(self.main_interval))
             try:
-                self._write_state()
+                self.clock_tracker._cleanup()
+                aircraft_state, sync, clients, prometheus_text = self._write_state()
+                await self.loop.run_in_executor(None, self._write_state_files,
+                                                 aircraft_state, sync, clients, prometheus_text)
                 self.clock_tracker.clear_all_sync_points()
             except Exception:
                 glogger.exception("Failed to write state files")

@@ -131,8 +131,8 @@ class Tracker(object):
         self.partition_count = partition[1]
         self.coordinator = coordinator
         self.loop = loop
-        self.mlat_wanted = []
-        self.mlat_wanted_ts = time.time()
+        self.mlat_wanted = set()
+        self.loop.call_later(1.0, self._rebuild_mlat_wanted)
 
     def in_local_partition(self, icao):
         if self.partition_count == 1:
@@ -181,6 +181,24 @@ class Tracker(object):
         receiver.sync_interest.clear()
         receiver.mlat_interest.clear()
 
+    def _rebuild_mlat_wanted(self):
+        self.loop.call_later(1.0, self._rebuild_mlat_wanted)
+        now = time.time()
+        self.mlat_wanted = set()
+        for ac in self.aircraft.values():
+            since_force = now - ac.last_force_mlat
+            if not ac.force_mlat and since_force > FORCE_MLAT_INTERVAL:
+                ac.force_mlat = True
+            if since_force > FORCE_MLAT_INTERVAL + 30:
+                ac.last_force_mlat = now
+                ac.force_mlat = False
+            if len(ac.tracking) >= 2 and ac.allow_mlat and (
+                    now - ac.last_adsb_time > NO_ADSB_MLAT_SECONDS or ac.sync_bad_percent > 10 or ac.force_mlat):
+                self.mlat_wanted.add(ac)
+                ac.do_mlat = True
+            else:
+                ac.do_mlat = False
+
     @profile.trackcpu
     def update_interest(self, receiver):
         """Update the interest sets of one receiver based on the
@@ -188,28 +206,6 @@ class Tracker(object):
 
         new_adsb = set()
         now = time.time()
-
-        if now - self.mlat_wanted_ts > 0.1:
-            self.mlat_wanted = set()
-            for ac in self.aircraft.values():
-                since_force = now - ac.last_force_mlat
-                #glogger.warn(f'since_force {ac.icao:06x} {since_force}')
-                if not ac.force_mlat and since_force > FORCE_MLAT_INTERVAL:
-                    ac.force_mlat = True
-                    #glogger.warn("force_mlat on {0:06x}".format(ac.icao))
-                if since_force > FORCE_MLAT_INTERVAL + 30:
-                    ac.last_force_mlat = now
-                    ac.force_mlat = False
-                    #glogger.warn("reset last_force_mlat {0:06x}".format(ac.icao))
-                if len(ac.tracking) >= 2 and ac.allow_mlat and (
-                        now - ac.last_adsb_time > NO_ADSB_MLAT_SECONDS or ac.sync_bad_percent > 10 or ac.force_mlat
-                        ):
-                    self.mlat_wanted.add(ac)
-                    ac.do_mlat = True
-                else:
-                    ac.do_mlat = False
-
-            self.mlat_wanted_ts = now
 
         new_mlat = receiver.tracking.intersection(self.mlat_wanted)
 

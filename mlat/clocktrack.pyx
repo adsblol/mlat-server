@@ -108,7 +108,7 @@ cdef get_limit(int cat):
     if cat == 3:
         return 16
 
-cdef _add_to_existing_syncpoint(dict clock_pairs, SyncPoint syncpoint, r0, double t0A, double t0B):
+cdef _add_to_existing_syncpoint(dict clock_pairs, dict receiver_pairs, SyncPoint syncpoint, r0, double t0A, double t0B):
     # add a new receiver and timestamps to an existing syncpoint
 
     # new state for the syncpoint: receiver, timestamp A, timestamp B,
@@ -187,6 +187,8 @@ cdef _add_to_existing_syncpoint(dict clock_pairs, SyncPoint syncpoint, r0, doubl
             clock_pairs[k] = pairing = ClockPairing(r0, r1, cat)
             r0.sync_peers[cat] += 1
             r1.sync_peers[cat] += 1
+            receiver_pairs.setdefault(r0, set()).add(k)
+            receiver_pairs.setdefault(r1, set()).add(k)
 
         else:
             if pairing.n > 8 and now - pairing.update_attempted < 0.2:
@@ -203,6 +205,10 @@ cdef _add_to_existing_syncpoint(dict clock_pairs, SyncPoint syncpoint, r0, doubl
                 #    logging.warning("rejected existing sync: %06x cat: %d p0: %d p1: %d limit: %d", syncpoint.address, cat, p0, p1, limit)
                 r0.sync_peers[cat] -= 1
                 r1.sync_peers[cat] -= 1
+                s = receiver_pairs.get(r0)
+                if s: s.discard(k)
+                s = receiver_pairs.get(r1)
+                if s: s.discard(k)
                 del clock_pairs[k]
                 continue
 
@@ -232,16 +238,12 @@ class ClockTracker(object):
         # is always less than receiver 1.
         self.clock_pairs = {}
 
+        self.receiver_pairs = {}  # receiver -> set of (r0, r1) keys involving that receiver
         self.coordinator = coordinator
         self.loop = loop
 
-        # schedule periodic cleanup
-        self.loop.call_later(1.0, self._cleanup)
-
     def _cleanup(self):
         """Called periodically to clean up clock pairings that have expired and update pairing.valid"""
-
-        self.loop.call_later(10.0, self._cleanup)
 
         now = time.time()
         prune = set()
@@ -256,6 +258,10 @@ class ClockTracker(object):
         for k, pairing in prune:
             k[0].sync_peers[pairing.cat] -= 1
             k[1].sync_peers[pairing.cat] -= 1
+            s = self.receiver_pairs.get(k[0])
+            if s: s.discard(k)
+            s = self.receiver_pairs.get(k[1])
+            if s: s.discard(k)
             del self.clock_pairs[k]
 
     @profile.trackcpu
@@ -268,8 +274,9 @@ class ClockTracker(object):
         Only reset the offsets, the drift shouldn't be affected
         """
         cdef ClockPairing pairing
-        for k, pairing in list(self.clock_pairs.items()):
-            if k[0] is receiver or k[1] is receiver:
+        for k in self.receiver_pairs.get(receiver, ()):
+            pairing = self.clock_pairs.get(k)
+            if pairing is not None:
                 pairing.reset_offsets()
 
     @profile.trackcpu
@@ -287,13 +294,14 @@ class ClockTracker(object):
         """
 
         cdef ClockPairing pairing
-        # Clean up clock_pairs immediately.
-        # Any membership in a pending sync point is noticed when we try to sync more receivers with it.
-        for k, pairing in list(self.clock_pairs.items()):
-            if k[0] is receiver or k[1] is receiver:
+        for k in self.receiver_pairs.pop(receiver, ()):
+            pairing = self.clock_pairs.pop(k, None)
+            if pairing is not None:
                 k[0].sync_peers[pairing.cat] -= 1
                 k[1].sync_peers[pairing.cat] -= 1
-                del self.clock_pairs[k]
+                other = k[1] if k[0] is receiver else k[0]
+                s = self.receiver_pairs.get(other)
+                if s: s.discard(k)
 
     @profile.trackcpu
     def receiver_sync(self, receiver,
@@ -359,14 +367,14 @@ class ClockTracker(object):
             for syncpoint in syncpointlist:
                 if abs(syncpoint.interval - interval) < 0.75e-3:
                     # interval matches within 0.75ms, close enough.
-                    _add_to_existing_syncpoint(self.clock_pairs, syncpoint, receiver, tA, tB)
+                    _add_to_existing_syncpoint(self.clock_pairs, self.receiver_pairs, syncpoint, receiver, tA, tB)
                     return
             # no matching syncpoint in syncpointlist, add one
             syncpoint = SyncPoint(message_details, interval)
 
             syncpointlist.append(syncpoint)
 
-            _add_to_existing_syncpoint(self.clock_pairs, syncpoint, receiver, tA, tB)
+            _add_to_existing_syncpoint(self.clock_pairs, self.receiver_pairs, syncpoint, receiver, tA, tB)
 
             return
 
@@ -492,7 +500,7 @@ class ClockTracker(object):
             receiver.sync_range_exceeded = now
             return
 
-        _add_to_existing_syncpoint(self.clock_pairs, syncpoint, receiver, tA, tB)
+        _add_to_existing_syncpoint(self.clock_pairs, self.receiver_pairs, syncpoint, receiver, tA, tB)
 
     def clear_all_sync_points(self):
         """Clear all syncpoint lists from sync_points.

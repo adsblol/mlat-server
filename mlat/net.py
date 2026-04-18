@@ -42,8 +42,8 @@ class MonitoringListener(object):
         self.port = port
         self.factory = factory
         self.tcp_server = None
-        self.clients = []
-        self.monitoring = []
+        self.clients = set()
+        self.monitoring = set()
 
     async def start(self):
         if not self.started:
@@ -70,7 +70,7 @@ class MonitoringListener(object):
     def _close(self):
         if self.tcp_server:
             self.tcp_server.close()
-        for client in self.clients:
+        for client in list(self.clients):
             client.close()
         self.clients.clear()
 
@@ -79,8 +79,8 @@ class MonitoringListener(object):
     def start_client(self, r, w):
         try:
             newclient = self._new_client(r, w)
-            self.clients.append(newclient)
-            self.monitoring.append(asyncio.ensure_future(self.monitor_client(newclient)))
+            self.clients.add(newclient)
+            self.monitoring.add(asyncio.ensure_future(self.monitor_client(newclient)))
         except Exception:
             self.logger.exception('Exception handling client')
 
@@ -88,11 +88,9 @@ class MonitoringListener(object):
     async def monitor_client(self, client):
         try:
             await client.wait_closed()
-            if client in self.clients:
-                self.clients.remove(client)
+            self.clients.discard(client)
             task = asyncio.current_task()
-            if task in self.monitoring:
-                self.monitoring.remove(task)
+            self.monitoring.discard(task)
         except Exception:
             self.logger.exception('Exception monitoring client')
 
