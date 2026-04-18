@@ -1,3 +1,5 @@
+importlib-resources
+setuptools<82
 numpy
 scipy
 pykalman
