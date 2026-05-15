@@ -1,4 +1,4 @@
-FROM docker.io/python:3.14-slim AS builder
+FROM docker.io/python:3.14.5-slim AS builder
 WORKDIR /app
 COPY requirements.txt .
 RUN export BUILD_DEPS="libopenblas-dev liblapack-dev libmpfr-dev libmpc-dev libgfortran5 gfortran pkg-config gcc g++ build-essential cmake make" && \
