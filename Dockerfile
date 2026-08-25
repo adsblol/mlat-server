@@ -9,7 +9,7 @@ RUN export BUILD_DEPS="libopenblas-dev liblapack-dev libmpfr-dev libmpc-dev libg
     rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN apt-get update && apt-get -y install gcc && \
-    pip install setuptools && \
+    pip install "setuptools<81" && \
     python3 setup.py build_ext --inplace && \
     apt-get purge -y --auto-remove gcc && \
     rm -rf /var/lib/apt/lists/*
